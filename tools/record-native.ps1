@@ -16,4 +16,10 @@ while(!(Test-Path -LiteralPath $ready)){
 }
 # gdigrab exposes wall-clock input timestamps; keep the first packet timestamp
 # in the diagnostic log to align the footage to the shared route's start epoch.
-& ffmpeg -hide_banner -y -debug_ts -f gdigrab -framerate 60 -draw_mouse 0 -i 'title=RustBakedVoxelLighting - Native showcase' -t 150 -an -c:v h264_nvenc -preset p5 -cq 20 -pix_fmt yuv420p $Output 2> evidence/native-capture.log
+$env:FFREPORT='file=evidence/native-ffmpeg-report.log:level=48'
+$captureArgs = '-report -hide_banner -y -debug_ts -f gdigrab -framerate 60 -draw_mouse 0 -i "title=RustBakedVoxelLighting - Native showcase" -t 150 -an -c:v h264_nvenc -preset p5 -cq 20 -pix_fmt yuv420p "' + $Output + '"'
+$recorder=Start-Process ffmpeg -ArgumentList $captureArgs -PassThru -WindowStyle Hidden -RedirectStandardError evidence/native-capture.log -RedirectStandardOutput evidence/native-capture.out
+$recorder.WaitForExit()
+$recorder.Refresh()
+Remove-Item Env:FFREPORT
+if($null -ne $recorder.ExitCode -and $recorder.ExitCode -ne 0){throw "Capture failed: inspect evidence/native-capture.log"}
