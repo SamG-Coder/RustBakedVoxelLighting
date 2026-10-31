@@ -1,5 +1,8 @@
 use std::{env, path::PathBuf, process::Command};
 fn main() {
+    if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        return;
+    }
     let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     for name in [
         "transport.comp",

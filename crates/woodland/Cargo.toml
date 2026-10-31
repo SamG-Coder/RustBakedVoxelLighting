@@ -5,9 +5,12 @@ edition.workspace = true
 license.workspace = true
 [dependencies]
 bvl-engine = { path = "../engine" }
-winit.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+
+bincode = "1.3"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+winit.workspace = true

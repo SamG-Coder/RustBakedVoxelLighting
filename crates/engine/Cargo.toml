@@ -4,9 +4,6 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 [dependencies]
-ash.workspace = true
-ash-window.workspace = true
-winit.workspace = true
 glam.workspace = true
 bytemuck.workspace = true
 serde.workspace = true
@@ -14,3 +11,14 @@ serde_json.workspace = true
 anyhow.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 crossbeam-channel = "0.5"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ash.workspace = true
+ash-window.workspace = true
+winit.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "26.0.1", default-features = false, features = ["webgpu", "wgsl"] }
+web-sys = { version = "=0.3.82", features = ["HtmlCanvasElement", "console"] }
+
+futures-channel = "0.3"

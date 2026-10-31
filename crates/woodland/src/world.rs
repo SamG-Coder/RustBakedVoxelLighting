@@ -2,7 +2,7 @@
 use anyhow::{Result, ensure};
 use serde::Deserialize;
 use std::path::Path;
-#[derive(Deserialize, Clone)]
+#[derive(serde::Serialize, Deserialize, Clone)]
 pub struct Plant {
     pub x: f32,
     pub y: f32,
@@ -40,6 +40,7 @@ pub struct Manifest {
     #[serde(rename = "sourceCommit")]
     pub source_commit: String,
 }
+#[derive(serde::Serialize, Deserialize)]
 pub struct Field {
     pub size: usize,
     pub extent: f32,

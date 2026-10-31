@@ -81,7 +81,7 @@ impl MeshData {
         self.indices.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
     }
 }
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 pub struct MeshRange {
     pub first_index: u32,
     pub index_count: u32,
@@ -104,7 +104,7 @@ impl Default for Instance {
     }
 }
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct Material {
     pub textures: [u32; 4],
     pub settings: [f32; 4],

@@ -1,5 +1,13 @@
-//! Native Vulkan services. No terrain, vegetation, gameplay, or habitat policy.
 pub mod assets;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod gpu;
+#[cfg(target_arch = "wasm32")]
+#[path = "web_gpu.rs"]
+pub mod gpu;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod jobs;
+#[cfg(target_arch = "wasm32")]
+#[path = "web_jobs.rs"]
+pub mod jobs;
+pub mod render_types;
 pub use glam;

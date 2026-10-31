@@ -1,11 +1,3 @@
-mod foliage;
-mod grass;
-mod habitat;
-mod lighting;
-mod map;
-mod plant_catalog;
-mod view;
-mod world;
 use anyhow::Result;
 use bvl_engine::gpu::{DrawLists, Renderer, Shaders, Upload};
 use glam::Vec3;
@@ -18,6 +10,7 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowId},
 };
+use woodland::{grass, map, view};
 // Packaged builds load their own assets regardless of the launch working directory.
 // The source-tree fallback retains cargo run support during development.
 fn asset_root() -> Result<PathBuf> {

@@ -4,18 +4,21 @@ use anyhow::Result;
 use bvl_engine::assets::*;
 use glam::Vec3;
 use std::{collections::HashMap, path::Path, sync::Arc};
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Prototype {
     pub levels: Vec<[MeshRange; 2]>,
     pub materials: [u32; 2],
     pub bounds_center: Vec3,
     pub bounds_radius: f32,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Tile {
     pub center: Vec3,
     pub terrain: MeshRange,
     pub far: MeshRange,
     pub plants: Vec<Plant>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Map {
     pub field: Arc<Field>,
     pub prototypes: Vec<Prototype>,

@@ -1,0 +1,47 @@
+name: Build and deploy Rust WebGPU
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Install matching WASM bindings tool
+        run: cargo install wasm-bindgen-cli --locked --version 0.2.105
+      - name: Download and verify the exported world
+        run: |
+          curl -fL --retry 3 -o /tmp/browser-assets-v1.zip https://github.com/SamG-Coder/RustBakedVoxelLighting/releases/download/browser-assets-v1/browser-assets-v1.zip
+          echo '7c765da35356b3667f43f392c5d2f5d63968fe8c0a0ee88c5458cb59f93a030c  /tmp/browser-assets-v1.zip' | sha256sum -c -
+          unzip -q /tmp/browser-assets-v1.zip -d web
+      - name: Compile the Rust browser renderer
+        run: |
+          cargo build --locked --release -p woodland-browser --target wasm32-unknown-unknown
+          wasm-bindgen --target web --out-dir web/pkg target/wasm32-unknown-unknown/release/woodland_browser.wasm
+          touch web/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

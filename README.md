@@ -137,3 +137,7 @@ Validation after the change: all 10 workspace tests, strict Clippy and the relea
 Code is MIT licensed; see [LICENSE](LICENSE). Generated assets come from the author's [BakedVoxelLighting](https://github.com/SamG-Coder/BakedVoxelLighting) project; see [asset provenance](docs/asset-provenance.md). No Kingdom Come game assets or NVIDIA SDK binaries are bundled. Third-party components retain their respective licences. `THIRD_PARTY_NOTICES.md` and the release's `THIRD_PARTY_LICENSES/` directory accompany the executable.
 
 To package a new build, run `tools/package-release.ps1`. It builds the locked release, collects dependency licence files from Cargo metadata, packages the executable and current assets, and writes SHA256SUMS.txt under `dist/`. The initial public version is a preview; no test workflows have been added to GitHub Actions.
+
+## Browser preview
+
+[Run the Rust WebGPU build](https://samg-coder.github.io/RustBakedVoxelLighting/) · [Build and capability notes](docs/browser.md). No Three.js; shared Rust world code compiled to WebAssembly.
