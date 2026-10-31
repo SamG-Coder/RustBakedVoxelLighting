@@ -295,6 +295,21 @@ fn finish_page(key: (i32, i32, bool), mesh: MeshData, parts: [(u32, u32); 2]) ->
         max_y,
     }
 }
+// A straight card edge can bridge several terrain triangles even when both ends
+// touch the ground. Seat the whole edge below the sampled surface, not just its ends.
+fn seated_edge(field: &Field, x: f32, z: f32, offset: Vec3) -> [f32; 2] {
+    let heights = [-1., 1.]
+        .map(|sign| field.surface_height(x + offset.x * sign, z + offset.z * sign) - 0.035);
+    let mut bridge = 0_f32;
+    let steps = ((offset.length() * 2. / 0.2).ceil() as usize).max(4);
+    for i in 1..steps {
+        let t = i as f32 / steps as f32;
+        let p = offset * (t * 2. - 1.);
+        let chord = heights[0] + (heights[1] - heights[0]) * t;
+        bridge = bridge.max(chord - (field.surface_height(x + p.x, z + p.z) - 0.035));
+    }
+    heights.map(|h| h - bridge)
+}
 fn build_far(field: &Field, key: (i32, i32, bool), cancel: &CancelToken) -> Option<Page> {
     let mut seed =
         (key.0 as u32).wrapping_mul(73856093) ^ (key.1 as u32).wrapping_mul(19349663) ^ 91271;
@@ -353,8 +368,9 @@ fn build_far(field: &Field, key: (i32, i32, bool), cancel: &CancelToken) -> Opti
             let base = Vec3::new(lx, y, lz);
             let mut left = base - offset;
             let mut right = base + offset;
-            left.y = field.surface_height(x - offset.x, z - offset.z) - 0.035;
-            right.y = field.surface_height(x + offset.x, z + offset.z) - 0.035;
+            let heights = seated_edge(field, x, z, offset);
+            left.y = heights[0];
+            right.y = heights[1];
             mesh.quad(
                 [
                     left,
@@ -452,9 +468,7 @@ fn build(field: &Field, key: (i32, i32, bool), cancel: &CancelToken) -> Option<P
                 let offset = Vec3::new(a.cos() * width * 0.5, 0., -a.sin() * width * 0.5);
                 let forward = Vec3::new(a.sin(), 0., a.cos()) * width;
                 let base = Vec3::new(lx, y, lz);
-                let edge_heights = [-1., 1.].map(|sign| {
-                    field.surface_height(x + offset.x * sign, z + offset.z * sign) - 0.035
-                });
+                let edge_heights = seated_edge(field, x, z, offset);
                 let first = mesh.vertices.len() as u32;
                 let mirrored = (height * 127.1)
                     .sin()
@@ -536,7 +550,27 @@ mod tests {
             assert!(!page.mesh.vertices.is_empty());
             for vertex in page.mesh.vertices.iter().filter(|v| v.uv[1] == 1.) {
                 let [x, y, z] = vertex.position;
-                assert!((y + 0.035 - field.surface_height(x, z)).abs() < 0.0001);
+                assert!(y + 0.035 <= field.surface_height(x, z) + 0.0001);
+            }
+        }
+    }
+
+    #[test]
+    fn grass_root_edges_do_not_bridge_a_terrain_crease() {
+        let mut field = field(100.);
+        for (i, h) in [15., -15., -15., 15.].into_iter().enumerate() {
+            field.values[i * 4] = h;
+        }
+        for width in [0.8, 1.5, 5.0] {
+            for angle in [0.0_f32, 0.7, 1.8] {
+                let offset = Vec3::new(angle.cos(), 0., angle.sin()) * width * 0.5;
+                let heights = seated_edge(&field, 0., 0., offset);
+                for i in 0..101 {
+                    let t = i as f32 / 100.;
+                    let p = offset * (t * 2. - 1.);
+                    let y = heights[0] + (heights[1] - heights[0]) * t;
+                    assert!(y <= field.surface_height(p.x, p.z) + 0.001);
+                }
             }
         }
     }

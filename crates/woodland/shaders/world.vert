@@ -1,6 +1,7 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
+layout(constant_id=0) const int MATERIAL_KIND=-1;
 layout(set=0,binding=1) uniform sampler2D images[64];
 layout(location=0) in vec3 position;
 layout(location=1) in vec3 normal;
@@ -20,13 +21,15 @@ layout(location=6) out vec2 yaw;
 layout(location=7) flat out int grass_tile;
 layout(location=8) flat out int grass_lod;
 layout(location=9) out vec2 grass_shape;
+layout(location=10) flat out vec2 grass_shadow;
 vec3 rotate_y(vec3 p,vec2 r){return vec3(p.x*r.y+p.z*r.x,p.y,-p.x*r.x+p.z*r.y);}
 void main(){
     Material mat=materials.items[draw.material];
     world=rotate_y(position*position_scale.w,rotation_tint.xy)+position_scale.xyz;
     world_normal=rotate_y(normal,rotation_tint.xy);
     texcoord=uv;colour=color;auxiliary=extra;fade=lod.xy;yaw=rotation_tint.xy;
-    int kind=int(mat.settings.x);grass_tile=0;grass_lod=0;grass_shape=vec2(0.,1.);
+    grass_shadow=vec2(0.,1.);
+    int kind=MATERIAL_KIND>=0?MATERIAL_KIND:int(mat.settings.x);grass_tile=0;grass_lod=0;grass_shape=vec2(0.,1.);
     if(kind==0 && position.y<1.2){
         vec2 coord=clamp((world.xz+2000.)/4000.,0.,1.);
         vec4 packed=textureLod(images[globals.geography_maps.w],(coord*2048.+.5)/2049.,0.);
@@ -46,7 +49,26 @@ void main(){
             float ground=(packed.r*65280.+packed.g*255.)/65535.*1024.-128.;
             world.y+=(ground-.035-(world.y-v*abs(color.a)))*(1.-v)*(1.-v);
         }
+        // The actual opaque root lies above the image border on several source
+        // cutouts. Anchor that root instead of their transparent bottom padding.
+        const float rootInset[16]=float[](.023,.012,.008,.016,.138,.009,.017,.045,.0,.078,.014,.055,.016,.006,.006,.011);
+        world.y-=abs(color.a)*rootInset[clamp(grass_tile,0,15)];
         vec2 anchor=normal.xy+position_scale.xz;
+        if(draw.pass!=0u){
+            // Both vertices/triangles of a tuft share this seed and distance.
+            // Wind cannot change which shadow fragments survive its range fade.
+            uvec2 cell=uvec2(ivec2(floor((anchor+2000.)*128.)));
+            uint h=cell.x*1664525u+cell.y*1013904223u;
+            h^=h>>16;h*=2246822519u;h^=h>>13;
+            grass_shadow=vec2(float(h&65535u)/65536.,
+                fade.x*(1.-smoothstep(48.,64.,distance(anchor,globals.camera_time.xz))));
+            // A rejected tuft has no shadow fragments in the existing shader.
+            // Collapse it before rasterization instead of shading/discarding its cards.
+            if(grass_shadow.x>=grass_shadow.y){
+                gl_Position=vec4(2.,2.,2.,1.);
+                return;
+            }
+        }
         float t=globals.camera_time.w;
         // Port of native-kernels.js windPosition: 0.085 strength, .85 phase speed,
         // independent secondary flutter and v^2 anchoring, transformed by card yaw/width.

@@ -104,6 +104,9 @@ pub struct Renderer {
     set_layout: vk::DescriptorSetLayout,
     layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
+    material_pipelines: Vec<vk::Pipeline>,
+    material_kinds: Vec<usize>,
+    cutout_shadow_pipelines: Vec<vk::Pipeline>,
     shadow_pipeline: vk::Pipeline,
     opaque_shadow_pipeline: vk::Pipeline,
     solid_materials: Vec<bool>,
@@ -587,6 +590,32 @@ impl Renderer {
                 false,
                 true,
             )?;
+            // Same shader source and render state, specialized once at startup.
+            // Keep the dynamic pipeline for unknown future material types.
+            let material_kinds = scene
+                .materials
+                .iter()
+                .map(|m| m.settings[0] as usize)
+                .collect();
+            let mut material_pipelines = Vec::with_capacity(5);
+            for kind in 0..5 {
+                material_pipelines.push(make_material_pipeline(
+                    &ctx,
+                    layout,
+                    shaders.vertex,
+                    if ctx.ray_query {
+                        shaders.rt_fragment
+                    } else {
+                        shaders.fragment
+                    },
+                    Some(HDR_FORMAT),
+                    vk::SampleCountFlags::TYPE_4,
+                    false,
+                    false,
+                    true,
+                    kind,
+                )?);
+            }
             let water_pipeline = make_pipeline(
                 &ctx,
                 layout,
@@ -629,6 +658,21 @@ impl Renderer {
                 false,
                 true,
             )?;
+            let mut cutout_shadow_pipelines = Vec::with_capacity(2);
+            for kind in [1, 2] {
+                cutout_shadow_pipelines.push(make_material_pipeline(
+                    &ctx,
+                    layout,
+                    shaders.vertex,
+                    shaders.shadow,
+                    None,
+                    vk::SampleCountFlags::TYPE_1,
+                    true,
+                    false,
+                    true,
+                    kind,
+                )?);
+            }
             let sky_pipeline = make_pipeline(
                 &ctx,
                 layout,
@@ -706,6 +750,9 @@ impl Renderer {
                 set_layout,
                 layout,
                 pipeline,
+                material_pipelines,
+                material_kinds,
+                cutout_shadow_pipelines,
                 shadow_pipeline,
                 opaque_shadow_pipeline,
                 solid_materials,
@@ -1291,7 +1338,7 @@ impl Renderer {
                         .depth_attachment(&water_depth),
                 );
                 self.bind(cmd, f, self.swap.extent, self.water_pipeline);
-                self.draw_list(cmd, water_draws, 0);
+                self.draw_list(cmd, water_draws, 3);
                 device.cmd_end_rendering(cmd);
             }
             image_barrier(
@@ -1585,7 +1632,11 @@ impl Renderer {
     unsafe fn draw_list(&self, cmd: vk::CommandBuffer, draws: &[Draw], pass: u32) {
         unsafe {
             let shadow = pass == 1 || pass == 2;
-            for phase in 0..if shadow { 2 } else { 1 } {
+            let mut bound_pipeline = vk::Pipeline::null();
+            // Populate opaque depth before alpha-tested vegetation. Both phases use
+            // the same material shaders, samples and coverage as before.
+            let partition = shadow || pass == 0;
+            for phase in 0..if partition { 2 } else { 1 } {
                 if shadow {
                     self.ctx.device.cmd_bind_pipeline(
                         cmd,
@@ -1599,9 +1650,40 @@ impl Renderer {
                 }
                 for d in draws {
                     if d.instances == 0
-                        || (shadow && self.solid_materials[d.material as usize] != (phase == 0))
+                        || (partition && self.solid_materials[d.material as usize] != (phase == 0))
                     {
                         continue;
+                    }
+                    if shadow && phase == 1 {
+                        let kind = self.material_kinds[d.material as usize];
+                        let pipeline = kind
+                            .checked_sub(1)
+                            .and_then(|index| self.cutout_shadow_pipelines.get(index))
+                            .copied()
+                            .unwrap_or(self.shadow_pipeline);
+                        if pipeline != bound_pipeline {
+                            self.ctx.device.cmd_bind_pipeline(
+                                cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                pipeline,
+                            );
+                            bound_pipeline = pipeline;
+                        }
+                    }
+                    if pass == 0 {
+                        let pipeline = self
+                            .material_pipelines
+                            .get(self.material_kinds[d.material as usize])
+                            .copied()
+                            .unwrap_or(self.pipeline);
+                        if pipeline != bound_pipeline {
+                            self.ctx.device.cmd_bind_pipeline(
+                                cmd,
+                                vk::PipelineBindPoint::GRAPHICS,
+                                pipeline,
+                            );
+                            bound_pipeline = pipeline;
+                        }
                     }
                     self.ctx.device.cmd_push_constants(
                         cmd,
@@ -1629,6 +1711,12 @@ impl Drop for Renderer {
             let d = &self.ctx.device;
             let _ = d.device_wait_idle();
             d.destroy_pipeline(self.pipeline, None);
+            for &pipeline in &self.material_pipelines {
+                d.destroy_pipeline(pipeline, None);
+            }
+            for &pipeline in &self.cutout_shadow_pipelines {
+                d.destroy_pipeline(pipeline, None);
+            }
             d.destroy_pipeline(self.water_pipeline, None);
             d.destroy_pipeline(self.shadow_pipeline, None);
             d.destroy_pipeline(self.opaque_shadow_pipeline, None);
@@ -2121,6 +2209,33 @@ fn make_pipeline(
     sky: bool,
     depth_write: bool,
 ) -> Result<vk::Pipeline> {
+    make_material_pipeline(
+        ctx,
+        layout,
+        vertex,
+        fragment,
+        format,
+        samples,
+        shadow,
+        sky,
+        depth_write,
+        -1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_material_pipeline(
+    ctx: &Context,
+    layout: vk::PipelineLayout,
+    vertex: &[u8],
+    fragment: &[u8],
+    format: Option<vk::Format>,
+    samples: vk::SampleCountFlags,
+    shadow: bool,
+    sky: bool,
+    depth_write: bool,
+    material_kind: i32,
+) -> Result<vk::Pipeline> {
     unsafe {
         let vs = ctx.device.create_shader_module(
             &vk::ShaderModuleCreateInfo::default()
@@ -2152,6 +2267,20 @@ fn make_pipeline(
                     .module(fs)
                     .name(c"main"),
             );
+        }
+        let specialization_data = material_kind.to_ne_bytes();
+        let entries = [vk::SpecializationMapEntry {
+            constant_id: 0,
+            offset: 0,
+            size: 4,
+        }];
+        let specialization = vk::SpecializationInfo::default()
+            .map_entries(&entries)
+            .data(&specialization_data);
+        if material_kind >= 0 {
+            for stage in &mut stages {
+                *stage = stage.specialization_info(&specialization);
+            }
         }
         let bindings = [
             vk::VertexInputBindingDescription {

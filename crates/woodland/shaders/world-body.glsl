@@ -1,4 +1,5 @@
 #include "common.glsl"
+layout(constant_id=0) const int MATERIAL_KIND=-1;
 layout(set=0,binding=1) uniform sampler2D images[64];
 #include "lighting.glsl"
 layout(set=0,binding=3) uniform sampler2DShadow shadow_map;
@@ -22,7 +23,7 @@ const float bayer[16]=float[](0.,8.,2.,10.,12.,4.,14.,6.,3.,11.,1.,9.,15.,7.,13.
 float visibility(out float coarseBlend){
     vec3 receiverNormal=normalize(world_normal);
     vec3 receiver=world+receiverNormal*.035;
-    if(int(materials.items[draw.material].settings.x)==2)
+    if((MATERIAL_KIND>=0?MATERIAL_KIND:int(materials.items[draw.material].settings.x))==2)
         receiver+=vec3(0.,grass_shape.x*texcoord.y*.95+.06,0.);
     float bias=.00012+.00016*(1.-max(dot(receiverNormal,normalize(globals.sun.xyz)),0.));
     return cascadedShadow(receiver,bias,coarseBlend);
@@ -39,7 +40,7 @@ vec4 varied(uint map,vec2 uv){
 void main(){
     float threshold=(bayer[(int(gl_FragCoord.y)%4)*4+int(gl_FragCoord.x)%4]+.5)/16.;
     if(fade.y>.5 ? threshold<1.-fade.x : threshold>=fade.x)discard;
-    Material mat=materials.items[draw.material];int kind=int(mat.settings.x);
+    Material mat=materials.items[draw.material];int kind=MATERIAL_KIND>=0?MATERIAL_KIND:int(mat.settings.x);
     if(kind==2){
         float d=distance(world.xz,globals.camera_time.xz);
         float nearFade=smoothstep(45.,65.,d), farFade=smoothstep(80.,96.,d);

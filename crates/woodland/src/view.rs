@@ -71,19 +71,8 @@ impl View {
         let daylight = ((sun.y + 0.12) / 0.09375).clamp(0., 1.);
         let light = if sun.y > 0. { sun } else { -sun };
         let target = Vec3::new(camera.x, map.field.height(camera.x, camera.z), camera.z);
-        let orientation = Mat4::look_at_rh(light * 700., Vec3::ZERO, Vec3::Z);
-        let shadow_matrix = |radius: f32| {
-            let mut center = orientation.transform_point3(target);
-            let texel = radius * 2. / 2048.;
-            center.x = (center.x / texel).round() * texel;
-            center.y = (center.y / texel).round() * texel;
-            let target = orientation.inverse().transform_point3(center);
-            let mut ortho = Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.1, 1400.);
-            ortho.y_axis.y *= -1.;
-            ortho * Mat4::look_at_rh(target + light * 700., target, Vec3::Z)
-        };
-        let light_vp = shadow_matrix(64.);
-        let far_light_vp = shadow_matrix(256.);
+        let light_vp = stable_shadow_matrix(target, light, 64.);
+        let far_light_vp = stable_shadow_matrix(target, light, 256.);
         let shadow_planes = [frustum(light_vp), frustum(far_light_vp)];
         for tile in &map.tiles {
             let distance = (tile.center - camera).length();
@@ -180,6 +169,15 @@ impl View {
                     );
                 }
             }
+        }
+        // Depth-writing cutouts benefit from drawing the closest instances first:
+        // farther leaves can then fail depth before expensive surface lighting.
+        for group in &mut self.groups {
+            group.sort_unstable_by(|a, b| {
+                let a = Vec3::from_slice(&a.position_scale[..3]).dot(forward);
+                let b = Vec3::from_slice(&b.position_scale[..3]).dot(forward);
+                a.total_cmp(&b)
+            });
         }
         for (id, group) in self.groups.iter().enumerate() {
             if group.is_empty() {
@@ -310,4 +308,70 @@ pub(crate) fn frustum(m: Mat4) -> [Vec4; 6] {
 }
 pub(crate) fn intersects(p: &[Vec4; 6], center: Vec3, radius: f32) -> bool {
     p.iter().all(|p| p.truncate().dot(center) + p.w >= -radius)
+}
+
+// Translate in light space without a second look_at: subtracting two large,
+// rounded world positions used to perturb the basis whenever the camera moved.
+fn stable_shadow_matrix(target: Vec3, light: Vec3, radius: f32) -> Mat4 {
+    let orientation = Mat4::look_at_rh(light * 700., Vec3::ZERO, Vec3::Z);
+    let mut center = orientation.transform_point3(target);
+    let texel = radius * 2. / 2048.;
+    center.x = smooth_shadow_anchor(center.x / texel) * texel;
+    center.y = smooth_shadow_anchor(center.y / texel) * texel;
+    let view =
+        Mat4::from_translation(Vec3::new(-center.x, -center.y, -center.z - 700.)) * orientation;
+    let mut ortho = Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.1, 1400.);
+    ortho.y_axis.y *= -1.;
+    ortho * view
+}
+
+// Interpolate adjacent texel anchors through the middle half of a texel.
+// Unlike round(), this is continuous when the moving sun rotates light space.
+// It is analytic (not frame-count based), so no stale history or lagging sun.
+fn smooth_shadow_anchor(value: f32) -> f32 {
+    let base = value.floor();
+    let t = ((value - base - 0.25) * 2.).clamp(0., 1.);
+    base + t * t * (3. - 2. * t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn shadow_basis_is_camera_independent() {
+        let light = Vec3::new(0.4, 0.7, 0.5).normalize();
+        let target = Vec3::new(1200., 230., -1800.);
+        for radius in [64., 256.] {
+            let a = stable_shadow_matrix(target, light, radius);
+            let b = stable_shadow_matrix(target + Vec3::new(0.12, 0.03, -0.18), light, radius);
+            assert_eq!(a.x_axis, b.x_axis);
+            assert_eq!(a.y_axis, b.y_axis);
+            assert_eq!(a.z_axis, b.z_axis);
+        }
+    }
+    #[test]
+    fn moving_shadow_anchor_is_continuous_at_rounding_boundaries() {
+        for n in -100..100 {
+            let x = n as f32 + 0.5;
+            let delta = smooth_shadow_anchor(x + 0.0001) - smooth_shadow_anchor(x - 0.0001);
+            assert!((0. ..0.001).contains(&delta));
+            assert_eq!(smooth_shadow_anchor(n as f32), n as f32);
+        }
+    }
+    #[test]
+    fn packed_shadow_filter_matches_five_tap_tent() {
+        // Shader pairs six texels into three hardware-linear samples. Verify
+        // those pairs equal a linearly translated [1,2,3,2,1] kernel.
+        for step in 0..=100 {
+            let f = step as f32 / 100.;
+            let weights = [3. - 2. * f, 5., 1. + 2. * f];
+            let fractions = [(2. - f) / weights[0], (2. + f) / 5., f / weights[2]];
+            let expected = [1. - f, 2. - f, 3. - f, 2. + f, 1. + f, f];
+            for i in 0..3 {
+                assert!((weights[i] * (1. - fractions[i]) - expected[i * 2]).abs() < 0.00001);
+                assert!((weights[i] * fractions[i] - expected[i * 2 + 1]).abs() < 0.00001);
+            }
+            assert!((weights.iter().sum::<f32>() - 9.).abs() < 0.00001);
+        }
+    }
 }

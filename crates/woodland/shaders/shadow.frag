@@ -1,22 +1,35 @@
 #version 460
 #extension GL_GOOGLE_include_directive : require
 #include "common.glsl"
+layout(constant_id=0) const int MATERIAL_KIND=-1;
 layout(set=0,binding=1) uniform sampler2D images[64];
 layout(location=0) in vec3 world;
 layout(location=2) in vec2 texcoord;
 layout(location=5) in vec2 fade;
 layout(location=7) flat in int grass_tile;
 layout(location=8) flat in int grass_lod;
+layout(location=10) flat in vec2 grass_shadow;
+// Integer hashing avoids sin-based threshold instability and stays attached to
+// the card UVs rather than the camera or the wind-deformed world position.
+float shadowNoise(vec2 uv){
+ uvec2 p=uvec2(clamp(uv,0.,1.)*64.);
+ uint h=p.x*1664525u+p.y*1013904223u;
+ h^=h>>16;h*=2246822519u;h^=h>>13;
+ return float(h&65535u)/65536.;
+}
 void main(){
  Material m=materials.items[draw.material];
- if(int(m.settings.x)==0 || int(m.settings.x)==4)return;
+ int kind=MATERIAL_KIND>=0?MATERIAL_KIND:int(m.settings.x);
+ if(kind==0 || kind==4)return;
  vec2 uv=texcoord;
- if(int(m.settings.x)==2){
+ if(kind==2){
   if(grass_lod<0)discard;
   uv=(vec2(grass_tile%4,grass_tile/4)*1280.+13.+texcoord*1254.)/5120.;
-  float amount=fade.x*(1.-smoothstep(48.,64.,distance(world.xz,globals.camera_time.xz)));
-  float hash=fract(sin(dot(floor(texcoord*128.),vec2(12.9898,78.233)))*43758.5453);
-  if(hash>amount)discard;
+  if(grass_shadow.x>=grass_shadow.y)discard;
  }
- if(m.settings.x<3.5 && texture(images[m.textures.x],uv).a<m.settings.y)discard;
+ if(kind==1){
+  float threshold=shadowNoise(texcoord);
+  if(fade.y>.5 ? threshold<1.-fade.x : threshold>=fade.x)discard;
+ }
+ if(kind<4 && texture(images[m.textures.x],uv).a<m.settings.y)discard;
 }
