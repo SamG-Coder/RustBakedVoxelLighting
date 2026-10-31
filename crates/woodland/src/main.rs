@@ -63,6 +63,7 @@ struct Game {
     wetness: f32,
     rain: bool,
     rtx: u32,
+    showcase: bool,
 }
 impl Game {
     fn new(event: &ActiveEventLoop) -> Result<Self> {
@@ -70,7 +71,10 @@ impl Game {
             Window::default_attributes()
                 .with_title("RustBakedVoxelLighting | loading Vulkan")
                 .with_inner_size(PhysicalSize::new(1600, 900))
-                .with_resizable(std::env::var_os("BVL_CAPTURE").is_none()),
+                .with_resizable(
+                    std::env::var_os("BVL_CAPTURE").is_none()
+                        && std::env::var_os("BVL_SHOWCASE").is_none(),
+                ),
         )?;
         let root = asset_root()?;
         println!("Assets: {}", root.display());
@@ -110,6 +114,19 @@ impl Game {
             pitch = direction.y.asin();
         }
         let now = Instant::now();
+        if std::env::var_os("BVL_SHOWCASE").is_some() {
+            window.set_title("RustBakedVoxelLighting - Native showcase");
+            std::fs::write(
+                "evidence/native-ready.txt",
+                format!(
+                    "{:.6}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_secs_f64()
+                        + 30.
+                ),
+            )?;
+        }
         if std::env::var_os("BVL_GRASS_REVIEW").is_some() {
             camera = Vec3::new(-40., map.field.height(-40., 65.) + 1.7, 65.);
             yaw = 0.9;
@@ -129,6 +146,7 @@ impl Game {
             "Ready: direct Vulkan. Enter = walk, F = fly, Esc = release mouse, WASD, Q/E altitude, Shift = fast. N = day/night, P = pause clock, [/] = hour, R = wet/dry weather. X = RTX mode (screen-space / ray reflections / reflections + shadows)."
         );
         Ok(Self {
+            showcase: std::env::var_os("BVL_SHOWCASE").is_some(),
             window,
             renderer,
             map,
@@ -189,13 +207,13 @@ impl Game {
         let elapsed = now.duration_since(self.last).as_secs_f32();
         self.last = now;
         let dt = elapsed.min(0.05);
-        let time = self.start.elapsed().as_secs_f32();
+        let mut time = self.start.elapsed().as_secs_f32();
         if self.auto_walk && time > 5. {
             self.camera.x = -40. + (time - 5.) * 8.;
             self.camera.z = 65. - (time - 5.) * 25.;
             self.camera.y = self.map.field.height(self.camera.x, self.camera.z) + 4.;
         }
-        let forward = Vec3::new(
+        let mut forward = Vec3::new(
             self.yaw.sin() * self.pitch.cos(),
             self.pitch.sin(),
             -self.yaw.cos() * self.pitch.cos(),
@@ -250,6 +268,19 @@ impl Game {
         }
         let target_wet = if self.rain { 1. } else { 0. };
         self.wetness += (target_wet - self.wetness) * (1. - (-dt / 20.).exp());
+        if self.showcase {
+            let seconds = (time - 30.).clamp(0., woodland::showcase::DURATION);
+            let pose = woodland::showcase::sample(&self.map, seconds);
+            self.camera = pose.position;
+            forward = pose.forward;
+            self.hour = pose.hour;
+            if time >= 153. {
+                return Ok(false);
+            }
+            if time >= 30. {
+                time = 30. + seconds;
+            }
+        }
         let hour = self.hour;
         let mut globals = self.view.prepare(
             &self.map,
@@ -329,7 +360,9 @@ impl Game {
         }
         if self.title_time.elapsed().as_secs_f32() > 1. {
             let fps = self.frames as f32 / self.title_time.elapsed().as_secs_f32();
-            self.window.set_title(&format!("RustBakedVoxelLighting | Vulkan | {fps:.0} FPS | {} draws | {} grass pages | Enter: Walk / F: Fly / Esc: Release",(self.view.draws.len()+self.view.water.len()),self.grass.count()));
+            if !self.showcase {
+                self.window.set_title(&format!("RustBakedVoxelLighting | Vulkan | {fps:.0} FPS | {} draws | {} grass pages | Enter: Walk / F: Fly / Esc: Release",(self.view.draws.len()+self.view.water.len()),self.grass.count()));
+            }
             self.frames = 0;
             self.title_time = now;
         }

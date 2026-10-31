@@ -35,6 +35,7 @@ pub struct BrowserGame {
     hour: f32,
     frames: u32,
     draws: usize,
+    showcase: Option<f32>,
 }
 #[wasm_bindgen]
 impl BrowserGame {
@@ -98,7 +99,13 @@ impl BrowserGame {
             hour: 10.,
             frames: 0,
             draws: 0,
+            showcase: None,
         })
+    }
+    pub fn showcase(&mut self, seconds: f32) {
+        self.showcase = if seconds < -100. { None } else { Some(seconds) };
+        self.mode = 0;
+        self.keys = 0;
     }
     pub fn mode(&mut self, mode: u8) {
         self.mode = mode;
@@ -124,7 +131,7 @@ impl BrowserGame {
         };
         self.last = time;
         self.renderer.resize(width, height);
-        let forward = Vec3::new(
+        let mut forward = Vec3::new(
             self.yaw.sin() * self.pitch.cos(),
             self.pitch.sin(),
             -self.yaw.cos() * self.pitch.cos(),
@@ -170,6 +177,15 @@ impl BrowserGame {
             }
         }
         self.hour = (self.hour + dt / 60.).rem_euclid(24.);
+        let time = if let Some(seconds) = self.showcase {
+            let pose = woodland::showcase::sample(&self.map, seconds);
+            self.camera = pose.position;
+            forward = pose.forward;
+            self.hour = pose.hour;
+            30. + seconds
+        } else {
+            time
+        };
         let mut g = self.view.prepare(
             &self.map,
             self.camera,
