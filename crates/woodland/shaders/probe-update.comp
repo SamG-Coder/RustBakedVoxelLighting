@@ -1,0 +1,94 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_nonuniform_qualifier : require
+#define RTX
+#define PROBE_COMPUTE
+#include "common.glsl"
+layout(local_size_x=32) in;
+layout(set=0,binding=1) uniform sampler2D images[64];
+#include "lighting.glsl"
+#include "atmosphere.glsl"
+#include "surface.glsl"
+#include "ray-query.glsl"
+#include "probe-cache.glsl"
+
+// One workgroup owns a probe: the same 64 rays are distributed over 32 lanes.
+// Shared reduction is portable across hardware subgroup sizes and needs no atomics.
+shared vec4 raySums[320];
+void main(){
+ uint lane=gl_LocalInvocationIndex;
+ uint index=(draw.material*256u+gl_WorkGroupID.x)%6912u;
+ ivec3 local=ivec3(int(index)%24,(int(index)/24)%12,int(index)/288);
+ ivec3 cell=ivec3(floor(globals.camera_time.xyz/GI_STEP))-GI_GRID/2+local;
+ int address=probeAddress(cell);vec3 origin=(vec3(cell)+.5)*GI_STEP;
+ vec4 ground=textureLod(images[globals.geography_maps.w],(clamp((origin.xz+2000.)/4000.,0.,1.)*2048.+.5)/2049.,0.);
+ float groundHeight=(ground.r*65280.+ground.g*255.)/65535.*1024.-128.;
+ if(origin.y<groundHeight+.5){if(lane==0)gi.records[address].cell=ivec4(cell,0);return;}
+ CachedProbe fresh;
+ fresh.cell=ivec4(cell,1);fresh.c0=vec4(0.);fresh.cx=vec4(0.);fresh.cy=vec4(0.);fresh.cz=vec4(0.);
+ for(int i=0;i<6;i++)fresh.moments[i]=vec4(0.);
+ float backfaces=0.;
+ // Different deterministic spherical rotations accumulate in persistent probes,
+ // never as independent noisy rays evaluated by every visible surface pixel.
+ float rotation=float(draw.material/27u)*.61803399*6.2831853;
+ for(int r=int(lane);r<64;r+=32){
+   float y=1.-2.*(float(r)+.5)/64.,a=float(r)*2.39996323+rotation;
+   vec3 direction=vec3(cos(a)*sqrt(1.-y*y),y,sin(a)*sqrt(1.-y*y));
+   rayQueryEXT query;
+   rayQueryInitializeEXT(query,scene_acceleration,0,255,origin,.05,direction,80.);
+   while(rayQueryProceedEXT(query)){
+     if(rayQueryGetIntersectionTypeEXT(query,false)==gl_RayQueryCandidateIntersectionTriangleEXT){
+       vec3 normal;uint material;vec4 s=raySurface(query,false,normal,material);
+       if(s.a>=materials.items[material].settings.y)rayQueryConfirmIntersectionEXT(query);
+     }
+   }
+   float distanceHit=80.;vec3 incoming;
+   if(rayQueryGetIntersectionTypeEXT(query,true)==gl_RayQueryCommittedIntersectionNoneEXT){
+     incoming=atmosphereRadiance(direction,origin,false,false);
+   }else{
+     distanceHit=rayQueryGetIntersectionTEXT(query,true);
+     vec3 n;uint id;vec4 s=raySurface(query,true,n,id);Material mat=materials.items[id];
+     int kind=int(mat.settings.x);vec3 hit=origin+direction*distanceHit;
+     if(kind!=1 && !rayQueryGetIntersectionFrontFaceEXT(query,true))backfaces+=1.;
+     if(dot(n,-direction)<0.)n=-n;
+     vec3 albedo=s.rgb*mat.tint.rgb;
+     if(kind==4){vec4 land;float rock,merge,wet;albedo=terrainAlbedo(mat,hit,2.,vec2(0.),vec2(0.),land,rock,merge,wet);}
+     Probe transport=transportAt(hit+n*.15);
+     vec3 light=normalize(globals.sun.xyz);
+     float visible=tracedShadow(hit+n*.12,light)*cloudTransmission(hit,light);
+     float diffuse=max(dot(n,light),0.);
+     if(kind==1)diffuse=diffuse*.8+.12;
+     vec3 ambient=mix(vec3(.08,.075,.06),vec3(.18,.24,.32),clamp(n.y*.5+.5,0.,1.))*globals.sky.x*mix(.3,1.,transport.bounce_sky.a);
+     incoming=albedo*(ambient+globals.sun_colour.rgb*globals.sun.w*visible*diffuse/3.14159265);
+   }
+   incoming=min(incoming,vec3(4.));
+   fresh.c0.rgb+=incoming/64.;fresh.cx.rgb+=incoming*direction.x/32.;fresh.cy.rgb+=incoming*direction.y/32.;fresh.cz.rgb+=incoming*direction.z/32.;
+   for(int axis=0;axis<6;axis++){
+     vec3 d=vec3(axis==0?1.:axis==1?-1.:0.,axis==2?1.:axis==3?-1.:0.,axis==4?1.:axis==5?-1.:0.);
+     float weight=pow(max(dot(direction,d),0.),8.);
+     fresh.moments[axis]+=vec4(distanceHit,distanceHit*distanceHit,1.,0.)*weight;
+   }
+ }
+ fresh.c0.w=backfaces;
+ raySums[lane]=fresh.c0;raySums[32+lane]=fresh.cx;raySums[64+lane]=fresh.cy;raySums[96+lane]=fresh.cz;
+ for(uint i=0;i<6;i++)raySums[(4+i)*32+lane]=fresh.moments[i];
+ barrier();
+ for(uint stride=16;stride>0;stride>>=1){
+   if(lane<stride)for(uint i=0;i<10;i++)raySums[i*32+lane]+=raySums[i*32+lane+stride];
+   barrier();
+ }
+ if(lane!=0)return;
+ fresh.c0=raySums[0];fresh.cx=raySums[32];fresh.cy=raySums[64];fresh.cz=raySums[96];
+ backfaces=fresh.c0.w;fresh.c0.w=0.;
+ for(int i=0;i<6;i++)fresh.moments[i]=raySums[(4+i)*32];
+ CachedProbe old=gi.records[address];bool retain=currentProbe(old,cell);
+ for(int i=0;i<6;i++)fresh.moments[i]/=max(fresh.moments[i].z,.001);
+ if(backfaces>24.){gi.records[address].cell=ivec4(cell,0);return;}
+ float history=retain?.90:0.;
+ fresh.c0=mix(fresh.c0,old.c0,history);fresh.cx=mix(fresh.cx,old.cx,history);fresh.cy=mix(fresh.cy,old.cy,history);fresh.cz=mix(fresh.cz,old.cz,history);
+ for(int i=0;i<6;i++)fresh.moments[i]=mix(fresh.moments[i],old.moments[i],retain?.75:0.);
+ fresh.state=vec4(0.,0.,0.,retain?old.state.w:globals.camera_time.w);
+ fresh.light=globals.sun;
+ gi.records[address]=fresh;
+}

@@ -1,0 +1,78 @@
+#version 460
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(set=0,binding=1) uniform sampler2D images[64];
+struct Probe {vec4 bounce_sky;vec4 side;vec4 bounce_x;vec4 bounce_y;vec4 bounce_z;};
+layout(std430,set=0,binding=4) buffer Transport {Probe probes[];} baked;
+layout(push_constant) uniform Bake {uint occupancy;uint heights;uint size;uint layers;} info;
+float heightAt(vec2 p) {
+ vec2 uv=clamp((p+2000.)/4000.,vec2(.5/float(info.size)),vec2(1.-.5/float(info.size)));
+ vec4 h=textureLod(images[info.heights],uv,0.);
+ return (h.r*65280.+h.g*255.)/65535.*1024.-128.;
+}
+vec4 occupancyAt(vec3 p) {
+ ivec2 cell=ivec2(floor((p.xz+2000.)/4000.*float(info.size)));
+ if(any(lessThan(cell,ivec2(0)))||any(greaterThanEqual(cell,ivec2(info.size))))return vec4(0.);
+ float h=heightAt(p.xz);
+ if(p.y<h+.15)return vec4(.12,.10,.065,1.);
+ int y=int(floor((p.y-h)/64.*float(info.layers)));
+ if(y>=int(info.layers))return vec4(0.);
+ return texelFetch(images[info.occupancy],ivec2(cell.x,cell.y*int(info.layers)+max(y,0)),0);
+}
+void main(){
+ uvec3 c=gl_GlobalInvocationID;
+ if(c.x>=info.size||c.y>=info.size||c.z>=info.layers)return;
+ vec2 xz=(vec2(c.xy)+.5)/float(info.size)*4000.-2000.;
+ vec3 p=vec3(xz.x,heightAt(xz)+(float(c.z)+.5)*64./float(info.layers),xz.y);
+ vec3 bounce=vec3(0.),bx=vec3(0.),by=vec3(0.),bz=vec3(0.);float sky=0.;vec4 side=vec4(0.);
+ // Static hemispherical transport: foliage absorbs partially, terrain is opaque.
+ for(int ray=0;ray<12;ray++){
+   float angle=float(ray)*2.39996323;
+   float up=.12+.82*(float(ray)+.5)/12.;
+   vec3 dir=vec3(cos(angle)*sqrt(1.-up*up),up,sin(angle)*sqrt(1.-up*up));
+   float trans=1.;
+   for(int step=0;step<16;step++){
+     float d=3.+float(step)*4.+float(step*step)*.35;
+     vec4 hit=occupancyAt(p+dir*d);
+     float absorbed=trans*hit.a;
+     trans*=1.-hit.a;
+     if(trans<.025)break;
+   }
+   sky+=trans/12.;
+ }
+ // One-bounce incoming-light approximation over the full sphere. The stored
+ // directional basis changes with the sun/moon without rebaking geometry.
+ for(int ray=0;ray<16;ray++){
+   float y=1.-2.*(float(ray)+.5)/16.,angle=float(ray)*2.39996323;
+   vec3 dir=vec3(cos(angle)*sqrt(1.-y*y),y,sin(angle)*sqrt(1.-y*y));
+   float trans=1.;
+   for(int step=0;step<10;step++){
+     vec3 q=p+dir*(2.+float(step)*3.+float(step*step)*.45);
+     vec4 hit=occupancyAt(q);float weight=trans*hit.a;
+     if(weight>.025){
+       float ground=heightAt(q.xz);bool soil=q.y<ground+.15;
+       vec3 normal=soil?normalize(vec3(heightAt(q.xz-vec2(4,0))-heightAt(q.xz+vec2(4,0)),8.,heightAt(q.xz-vec2(0,4))-heightAt(q.xz+vec2(0,4)))):normalize(vec3(0.,.7,0.)-dir*.6);
+       vec3 surface=vec3(q.x,max(q.y,ground+.7),q.z);
+       float openness=1.;
+       for(int s=0;s<6;s++)openness*=1.-occupancyAt(surface+vec3(0.,3.+float(s)*5.,0.)).a;
+       vec3 transfer=hit.rgb*(weight/16.)*mix(.15,1.,openness);
+       bounce+=transfer;bx+=transfer*normal.x*.5;by+=transfer*normal.y*.5;bz+=transfer*normal.z*.5;
+     }
+     trans*=1.-hit.a;if(trans<.025)break;
+   }
+ }
+ for(int axis=0;axis<4;axis++){
+   vec3 dir=vec3(axis==0?1.:axis==1?-1.:0.,.55,axis==2?1.:axis==3?-1.:0.);
+   float trans=1.;
+   for(int step=0;step<20;step++){
+     vec4 hit=occupancyAt(p+normalize(dir)*(4.+float(step)*6.));
+     trans*=1.-hit.a;if(trans<.025)break;
+   }
+   side[axis]=trans;
+ }
+ uint index=(c.y*info.layers+c.z)*info.size+c.x;
+ baked.probes[index].bounce_sky=vec4(bounce,sky);
+ baked.probes[index].side=side;
+ baked.probes[index].bounce_x=vec4(bx,0.);
+ baked.probes[index].bounce_y=vec4(by,0.);
+ baked.probes[index].bounce_z=vec4(bz,0.);
+}

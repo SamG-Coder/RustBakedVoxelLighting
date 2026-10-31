@@ -1,0 +1,11 @@
+/target/
+/dist/
+/assets/
+/evidence/
+/third_party/
+/docs/bevy-*-reference.*
+*.log
+*.err
+__pycache__/
+.env
+.env.*
