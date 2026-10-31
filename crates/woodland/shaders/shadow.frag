@@ -30,6 +30,18 @@ void main(){
  if(kind==1){
   float threshold=shadowNoise(texcoord);
   if(fade.y>.5 ? threshold<1.-fade.x : threshold>=fade.x)discard;
+  // Stable material-space porosity; PCF integrates partial tissue transmission.
+  // Keep this independent from LOD fade so wood/terrain remain fully opaque.
+  if(shadowNoise(fract(texcoord*vec2(1.73,2.17)+vec2(.31,.19)))>.70)discard;
  }
- if(kind<4 && texture(images[m.textures.x],uv).a<m.settings.y)discard;
+ if(kind<4){
+  float alpha=texture(images[m.textures.x],uv).a;
+  if(kind==1){
+   float lastMip=floor(log2(float(max(textureSize(images[m.textures.x],0).x,textureSize(images[m.textures.x],0).y))));
+   float mip=textureQueryLod(images[m.textures.x],uv).x;
+   float tail=smoothstep(lastMip-2.,lastMip,mip);
+   float coverage=mix(step(m.settings.y,alpha),alpha,tail);
+   if(shadowNoise(fract(texcoord*vec2(2.31,1.41)+vec2(.13,.47)))>=coverage)discard;
+  }else if(alpha<m.settings.y)discard;
+ }
 }

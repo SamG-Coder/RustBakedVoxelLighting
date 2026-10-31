@@ -268,11 +268,21 @@ pub fn load(root: &Path) -> Result<(Map, SceneData)> {
                 ..Default::default()
             },
         );
+        // Keep the full canopy distribution: exported low LODs drop five out
+        // of six leaf cards and leave bare branches before the impostor handoff.
+        // Reduce card tessellation at distance rather than deleting foliage.
+        let canopy = MeshData::read(&root.join("world").join(&variant.levels[0].leaf))?;
+        let detailed_canopy = scene.mesh(crate::foliage::bowl_cards(canopy.clone()));
+        let distant_canopy = scene.mesh(crate::foliage::bowl_cards_detail(canopy, 1));
         let mut levels = Vec::new();
-        for level in &variant.levels {
+        for (lod, level) in variant.levels.iter().enumerate() {
             levels.push([
                 scene.mesh(MeshData::read(&root.join("world").join(&level.wood))?),
-                scene.mesh(MeshData::read(&root.join("world").join(&level.leaf))?),
+                if lod == 0 {
+                    detailed_canopy
+                } else {
+                    distant_canopy
+                },
             ]);
         }
         let mut minimum = Vec3::splat(f32::INFINITY);

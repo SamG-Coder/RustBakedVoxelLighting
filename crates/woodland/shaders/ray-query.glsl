@@ -19,14 +19,21 @@ vec4 raySurface(rayQueryEXT query,bool committed,out vec3 normal,out uint materi
 }
 float tracedShadow(vec3 p,vec3 direction){
  rayQueryEXT query;
+ float transmission=1.;
  rayQueryInitializeEXT(query,scene_acceleration,gl_RayFlagsTerminateOnFirstHitEXT,255,p,.06,direction,220.);
  while(rayQueryProceedEXT(query)){
   if(rayQueryGetIntersectionTypeEXT(query,false)==gl_RayQueryCandidateIntersectionTriangleEXT){
    vec3 n;uint mat;vec4 surface=raySurface(query,false,n,mat);
-   if(surface.a>=materials.items[mat].settings.y)rayQueryConfirmIntersectionEXT(query);
+   if(surface.a>=materials.items[mat].settings.y){
+    if(int(materials.items[mat].settings.x)==1){
+     // Thin leaves attenuate sunlight; trunks and terrain still stop it.
+     transmission*=.30;
+     if(transmission<.025){rayQueryTerminateEXT(query);return transmission;}
+    }else rayQueryConfirmIntersectionEXT(query);
+   }
   }
  }
- return rayQueryGetIntersectionTypeEXT(query,true)==gl_RayQueryCommittedIntersectionNoneEXT?1.:0.;
+ return rayQueryGetIntersectionTypeEXT(query,true)==gl_RayQueryCommittedIntersectionNoneEXT?transmission:0.;
 }
 #ifndef PROBE_COMPUTE
 vec4 tracedReflection(vec3 p,vec3 direction){

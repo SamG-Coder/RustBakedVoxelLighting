@@ -72,6 +72,13 @@ void main(){
         surface=vec4(.025,.095,.105,1.);
     }else{
         coverage=clamp((surface.a-mat.settings.y)/max(fwidth(surface.a),.025)+.5,0.,1.);
+        if(kind==1){
+            // At the last two mips a sparse leaf cluster becomes average alpha.
+            // Preserve that subpixel coverage instead of killing the whole card.
+            float lastMip=floor(log2(float(max(textureSize(images[mat.textures.x],0).x,textureSize(images[mat.textures.x],0).y))));
+            float mip=textureQueryLod(images[mat.textures.x],sampleUV).x;
+            coverage=mix(coverage,surface.a,smoothstep(lastMip-2.,lastMip,mip));
+        }
         if(coverage<=0.)discard;
         surface.rgb*=colour.rgb;
         if(kind==3){

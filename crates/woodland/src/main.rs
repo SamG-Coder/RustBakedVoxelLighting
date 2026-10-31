@@ -1,3 +1,4 @@
+mod foliage;
 mod grass;
 mod habitat;
 mod lighting;
@@ -125,6 +126,10 @@ impl Game {
             camera = Vec3::new(-40., map.field.height(-40., 65.) + 1.7, 65.);
             yaw = 2.5;
             pitch = 0.12;
+        }
+        if std::env::var_os("BVL_CANOPY_REVIEW").is_some() {
+            camera.y += 80.;
+            pitch = -0.32;
         }
         let capture = std::env::var_os("BVL_CAPTURE").map(PathBuf::from);
         println!(

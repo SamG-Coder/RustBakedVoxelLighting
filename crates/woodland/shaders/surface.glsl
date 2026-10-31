@@ -71,6 +71,10 @@ vec3 shadeSurface(vec3 albedo,vec3 n,vec3 view,vec3 p,int kind,float roughness,f
   // Thin plant tissue, not a translucent rectangular card. No face-sign dependence for grass.
   float forwardScatter=pow(max(dot(-light,view),0.),5.);
   float transmission=(.07+.22*forwardScatter)*(1.-nl*.7);
+  if(kind==1||kind==3){
+   float backLight=max(dot(-n,light),0.);
+   transmission=(.12+.30*forwardScatter)*(.35+.65*backLight);
+  }
   direct+=albedo*vec3(.80,1.,.58)*transmission/PI;
  }
  vec2 geo=clamp((p.xz+2000.)/4000.,vec2(0.),vec2(1.));
